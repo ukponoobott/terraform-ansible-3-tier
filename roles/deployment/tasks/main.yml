@@ -1,0 +1,55 @@
+---
+# tasks file for deployment
+- name: Create Docker volumes
+  docker_volume:
+    name: "{{ volume.split(':')[0] }}"
+    driver: local
+    state: present
+  with_items: >-
+    {{ containers
+    | selectattr('volumes', 'defined')
+    | map(attribute='volumes')
+    | flatten
+    | select('search', '^[^./].*')
+    | unique }}
+  loop_control:
+    loop_var: volume
+
+- name: Create Docker networks
+  docker_network:
+    name: "{{ network }}"
+    driver: bridge
+    state: present
+  with_items: "{{ containers | selectattr('networks', 'defined') | map(attribute='networks') | flatten | map(attribute='name') | unique }}"
+  loop_control:
+    loop_var: network
+
+- name: Copy config files
+  ansible.builtin.copy:
+    src: "./config"
+    dest: "/home/{{ ansible_user }}/config"
+    owner: "{{ ansible_user }}"
+    group: docker
+    mode: '0644'
+    remote_src: no
+
+- name: Load environment variables
+  include_vars:
+    file: env.yaml
+    name: env_vars
+
+- name: Run specified containers
+  docker_container:
+    name: "{{ item.name }}"
+    image: "{{ item.image }}"
+    ports: "{{ item.ports | default([]) }}"
+    env: "{{ env_vars.container_envs[item.name] | default({}) }}"
+    volumes: "{{ item.volumes | default([]) }}"
+    command: "{{ item.command | default('') }}"
+    labels: "{{ item.labels | default({}) }}"
+    networks: "{{ item.networks | default([{'name': 'backend_network'}]) }}"
+    log_driver: "json-file"
+    log_options:
+      max-size: "1m"
+      max-file: "1"
+  loop: "{{ containers }}"

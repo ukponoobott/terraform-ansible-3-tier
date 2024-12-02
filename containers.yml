@@ -1,0 +1,189 @@
+containers:
+  - name: postgres
+    image: postgres:latest
+    ports:
+      - "5432:5432"
+    networks:
+      - name: backend_network
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  - name: backend
+    image: ukponoobott/cv-challenge-backend:latest
+    networks:
+      - name: backend_network
+    ports:
+      - "8000:8000"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.backend.rule: "Host(`app.ukpono.site`) && (PathPrefix(`/api`) || PathPrefix(`/docs`))"
+      traefik.http.routers.backend.entrypoints: "websecure"
+      traefik.http.routers.backend.tls.certresolver: "myresolver"
+      traefik.http.routers.backend.tls: "true"
+      traefik.http.services.backend.loadbalancer.server.port: "8000"
+    dependencies:
+      - postgres
+    command: >-
+      /bin/sh -c "chmod +x /backend/prestart.sh &&
+      poetry run bash /backend/prestart.sh &&
+      poetry run uvicorn app.main:app --reload --host 0.0.0.0"
+
+  - name: frontend
+    image: ukponoobott/cv-challenge-frontend:latest
+    ports:
+      - "5173:80"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.frontend.rule: "Host(`app.ukpono.site`) && PathPrefix(`/`)"
+      traefik.http.middlewares.frontend-stripprefix.stripprefix.prefixes: "/api,/docs,/prometheus,/grafana"
+      traefik.http.routers.frontend.middlewares: "frontend-stripprefix"
+      traefik.http.services.frontend.loadbalancer.server.port: "80"
+      traefik.http.routers.frontend.tls: "true"
+      traefik.http.routers.frontend.entrypoints: "websecure"
+      traefik.http.routers.frontend.tls.certresolver: "myresolver"
+    networks:
+      - name: backend_network
+    dependencies:
+      - backend
+
+  - name: adminer
+    image: adminer
+    dependencies:
+      - postgres
+    ports:
+      - 9001:8080
+    labels:
+      traefik.enable": "true"
+      traefik.http.routers.adminer.rule: "Host(`app.ukpono.site`) && PathPrefix(`/db`)"
+      traefik.http.routers.adminer.entrypoints: "websecure"
+      traefik.http.routers.adminer.tls.certresolver: "myresolver"
+      traefik.http.middlewares.adminer-strip.stripprefix.prefixes: "/db"
+      traefik.http.routers.adminer.middlewares: "adminer-strip"
+      traefik.http.routers.adminer.tls: "true"
+      traefik.http.services.adminer.loadbalancer.server.port: "8080"
+    networks:
+      - name: backend_network
+
+  - name: traefik
+    image: traefik:v2.10
+    command:
+      --api.insecure=false
+      --api.dashboard=true
+      --providers.docker=true
+      --entrypoints.web.address=:80
+      --providers.docker.exposedbydefault=false
+      --entrypoints.websecure.address=:443
+      --entrypoints.web.http.redirections.entryPoint.to=websecure
+      --entrypoints.web.http.redirections.entryPoint.scheme=https
+      --certificatesresolvers.myresolver.acme.httpchallenge=true
+      --certificatesresolvers.myresolver.acme.email=legendsergio@gmail.com
+      --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json
+      --certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web
+      --log.level=DEBUG
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./letsencrypt:/letsencrypt"
+    networks:
+      - name: backend_network
+    labels:
+      # traefik.enable: "true"
+      # traefik.http.routers.traefik.rule: "Host(`app.ukpono.site`) && PathPrefix(`/dashboard`)"
+      # traefik.http.routers.traefik.service: "api@internal"
+      # traefik.http.routers.traefik.entrypoints: "websecure"
+      # traefik.http.routers.traefik.tls.certresolver: "myresolver"
+      # traefik.http.middlewares.https-redirect.redirectscheme.scheme: "https"
+      # traefik.http.middlewares.https-redirect.redirectscheme.permanent: "true"
+      # traefik.http.services.traefik.loadbalancer.server.port: "8080"
+      traefik.enable: "true"
+
+      # Dashboard Router
+      traefik.http.routers.traefik.rule: "Host(`app.ukpono.site`) && PathPrefix(`/dashboard`)"
+      traefik.http.routers.traefik.service: "api@internal"
+      traefik.http.routers.traefik.entrypoints: "websecure"
+      traefik.http.routers.traefik.tls.certresolver: "myresolver"
+
+      # Middleware for HTTPS redirection
+      traefik.http.middlewares.https-redirect.redirectscheme.scheme: "https"
+      traefik.http.middlewares.https-redirect.redirectscheme.permanent: "true"
+
+  - name: loki
+    image: grafana/loki:3.0.0
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/loki.yaml
+    volumes:
+      - /home/adminuser/config/config/loki/loki.yaml:/etc/loki/loki.yaml
+      - loki_data:/loki
+    networks:
+      - name: backend_network
+
+  - name: promtail
+    image: grafana/promtail:3.0.0
+    volumes:
+      - /home/adminuser/config/config/promtail/promtail.yaml:/etc/promtail/docker-config.yaml
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/docker-config.yaml
+    depends_on:
+      - loki
+    networks:
+      - name: backend_network
+  - name: grafana
+    image: grafana/grafana:11.0.0
+    ports:
+      - "3000:3000"
+    labels:
+      traefik.enable: "true"
+      # Router configuration for Grafana
+      traefik.http.routers.grafana.rule: "Host(`app.ukpono.site`) && PathPrefix(`/grafana`)"
+      traefik.http.routers.grafana.entrypoints: "websecure"
+      traefik.http.routers.grafana.tls.certresolver: "myresolver"
+      traefik.http.routers.grafana.tls: "true"
+      # Service configuration
+      traefik.http.services.grafana.loadbalancer.server.port: "3000"
+    volumes:
+      - /home/adminuser/config/config/grafana/datasources/grafana.yaml:/etc/grafana/provisioning/datasources/datasources.yaml # Datasource configuration
+      - /home/adminuser/config/config/grafana/grafana.ini:/etc/grafana/grafana.ini
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    networks:
+      - name: backend_network
+  - name: cadvisor
+    image: gcr.io/cadvisor/cadvisor:latest
+    ports:
+      - "8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - name: backend_network
+
+  - name: prometheus
+    image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.external-url=/prometheus"
+      - "--web.route-prefix=/"
+    ports:
+      - "9090:9090"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.prometheus.rule: "Host(`app.ukpono.site`) && PathPrefix(`/prometheus`)"
+      traefik.http.routers.prometheus.entrypoints: "websecure"
+      traefik.http.routers.prometheus.tls.certresolver: "myresolver"
+      traefik.http.routers.prometheus.middlewares: "prometheus-strip"
+      traefik.http.middlewares.prometheus-strip.stripPrefix.prefixes: "/prometheus"
+      traefik.http.services.prometheus.loadbalancer.server.port: "9090"
+      traefik.http.routers.prometheus.service: "prometheus"
+      traefik.http.middlewares.prometheus-strip.stripprefix.forceSlash: "false"
+      traefik.http.routers.prometheus.tls: "true"
+    volumes:
+      - /home/adminuser/config/config/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml
+    networks:
+      - name: backend_network

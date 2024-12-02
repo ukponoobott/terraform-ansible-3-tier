@@ -1,0 +1,19 @@
+formatter: markdown
+output-file: README.md
+output-mode: replace
+sections:
+  providers: true
+  inputs: true
+  outputs: true
+  modules: true
+  resources: true
+settings:
+  hide-header: false
+  hide-empty: false
+  show-aggregate-type-defaults: false
+  show-computed: true
+  show-required: true
+sort:
+  inputs: name
+  outputs: name
+  providers: name

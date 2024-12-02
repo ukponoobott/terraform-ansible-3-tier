@@ -1,0 +1,8 @@
+---
+# defaults file for deployment
+containers:
+  - name: nginx
+    image: nginx:latest
+    # state: started
+    ports:
+      - "80:80"

@@ -1,0 +1,9 @@
+---
+# handlers file for deployment
+- name: Wait for container readiness
+  wait_for:
+    host: 127.0.0.1
+    port: "{{ item.ports[0].split(':')[0] | int }}"
+    timeout: 30
+  with_items: "{{ containers }}"
+  when: item.name in ['postgres', 'backend', 'frontend']
